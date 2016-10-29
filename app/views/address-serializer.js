@@ -20,7 +20,6 @@ module.exports = class AddressSerializer {
 
   deserialize(object) {
     var result = {};
-
     if (!Utils.isEmpty(object.id)) {
       result.id = object.id;
     }

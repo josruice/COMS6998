@@ -7,69 +7,73 @@ function areValidParams(params) {
   return _.isObject(params)
 }
 
+function getUpdationDetails(address, currentAddress) {
+
+  var updateRequired = false;
+  _.each(_.keys(address), (key) => {
+    if (currentAddress[key] !== address[key]) {
+      currentAddress[key] = address[key];
+      updateRequired = true;
+    }
+  });
+
+  var updationDetails = {};
+  updationDetails["isUpdateRequired"] = updateRequired;
+  updationDetails["updatedAddress"] = currentAddress;
+  return updationDetails;
+
+}
+
 module.exports = class AddressController {
 
-  constructor(addressService, addressSerializer, customersController) {
+  constructor(addressService, addressSerializer, addressNormalizer) {
     this.addressService = addressService;
     this.addressSerializer = addressSerializer;
-    this.customersController = customersController;
+    this.addressNormalizer = addressNormalizer;
   }
 
   show(params, callback) {
-    var fetchAddress = (id, callback) => {
+    if (areValidParams(params)) {
+      var id = params.id;
       this.addressService.fetch(id, (err, address) => {
         if (err) {
           console.log("Error fetching data for id:" + id);
-          return callback(err);
+          callback(err);
         } else {
-          return this.addressSerializer.render(address, callback);
+          this.addressSerializer.render(address, callback);
         }
       });
-    }
-
-    if (areValidParams(params)) {
-      if (params.id) {
-        var id = params.id;
-        return fetchAddress(id, callback);
-      } else if (params.email) {
-        // Get address of given customer email.
-        this.customersController.show(params, (err, customerData) => {
-          if (err) return callback(err);
-          var hasAddress = customerData.address;
-          if (hasAddress) {
-            var addressId = customerData.address;
-            return fetchAddress(addressId, callback);
-          } else {
-            // TODO Refactor to object not found error.
-            return callback(new Exception("Address not found"));
-          }
-        })
-      } else {
-        // Get all addreses.
-        return fetchAddress(null, callback);
-      }
     } else {
       return callback("Null Object Passed which trying to show data");
     }
   }
 
   create(params, callback) {
-
     if (areValidParams(params) && areValidParams(params.address)) {
 
       var address = this.addressSerializer.deserialize(params.address);
 
-      this.addressService.save(address, (err, savedAddress) => {
+      this.addressNormalizer.normalize(address, (err, normalizedAddress) => {
         if (err) {
-          console.log("Error while trying to save address information: " + JSON.stringify(params.address))
+          console.log("Error while normalizing address");
           callback(err);
           return;
-
         } else {
-          this.addressSerializer.render(savedAddress, callback);
-          return;
+          this.addressService.save(normalizedAddress, (err, savedAddress) => {
+            if (err) {
+
+              console.log("Error while trying to save address information: " + JSON.stringify(params.address))
+              callback(err);
+              return;
+
+            } else {
+
+              this.addressSerializer.render(savedAddress, callback);
+              return;
+            }
+          });
         }
-      });
+      }, this);
     } else {
       callback("Null or Empty object passed while trying to save data");
     }
@@ -82,17 +86,44 @@ module.exports = class AddressController {
       var id = params.id;
       var address = params.address;
 
-      this.addressService.update(id, address, (err, updatedAddress) => {
-        if (err) {
-          console.log("Error while trying to save address information: " + JSON.stringify(params.address))
-          callback(err);
-          return;
+      address = this.addressSerializer.deserialize(params.address);
+      params = _.omit(params, "address");
+      // This will validate new entries
+      this.addressService.create(address, true);
 
+      this.show(params, (err, currentAddress) => {
+        if (err) {
+          return callback(err);
         } else {
-          this.addressSerializer.render(updatedAddress, callback);
-          return;
+          var updationDetails = getUpdationDetails(address, currentAddress);
+
+          var isUpdationRequired = updationDetails["isUpdateRequired"];
+
+          if (isUpdationRequired) {
+
+            var params = {};
+            var updatedAddress = updationDetails["updatedAddress"];
+            params["address"] = updatedAddress;
+
+            this.create(params, (err, address) => {
+
+              if (err) {
+                // If get item already exist exception then return updatedAddress
+                return callback(err);
+              } else {
+                // No need to serialize this as this create already returns us serialized object
+                return callback(null, address);
+              }
+
+            });
+          } else {
+            console.log("No update required");
+            callback("No update required");
+            // Throw Exception. Talk to Sarang
+          }
         }
-      });
+      }, this);
+
     } else {
       callback("Null or empty id or empty address sent for updation");
     }

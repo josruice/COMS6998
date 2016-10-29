@@ -3,11 +3,12 @@
 // Vendor imports.
 const _ = require('underscore');
 const AWS = require('aws-sdk');
+const DYNAMO_DOC_ClIENT = new AWS.DynamoDB.DocumentClient();
 const HTTPS = require('https');
 
 // Internal imports.
 const Dao = require('./app/services/dao/dao');
-const AddressSao = require('./app/services/address-sao');
+const AddressSao = require('./app/services/sao/address-sao');
 
 const CustomerService = require('./app/services/customer-service');
 const CustomerSerializer = require('./app/views/customer-serializer');
@@ -17,7 +18,6 @@ const AddressesController = require('./app/controllers/addresses-controller');
 const AddressService = require('./app/services/address-service');
 const AddressSerializer = require('./app/views/address-serializer');
 const AddressNormalizer = require('./app/normalizers/address-normalizer');
-const AddressNormalizerSao = require('./app/services/sao/address-normalizer-sao');
 
 // Constants.
 const CUSTOMERS_TABLE_NAME = 'customers';
@@ -27,73 +27,30 @@ const ADDRESS_SAO_AUTH_ID = '10d3d858-072e-fdf3-0c44-a669f2cca11e';
 const ADDRESS_SAO_AUTH_ID_TOKEN = '0gaJxoGO4b3btMZf7X3v';
 
 // Singleton variables.
-var dynamoDocClient;
-
 var customerDao;
 var customerService;
 var customerSerializer;
 var customersController;
 
 var addressDao;
-var addressNormalizerSao;
+var addressSao;
 var addressNormalizer;
 var addressService;
 var addressSerializer;
 var addressesController;
-var addressSao;
 
+// Mapping to Error codes
+var mapping = require('./error-mapping');
 
 // Functions.
-function sendHttpResponse(callback) {
-  return (err, body) => {
-    var statusCode = '200';
-    var body = body;
-    if (err) {
-      statusCode = '400';
-      body = err.message;
-      console.error(err);
-    }
-
-    callback(null, {
-      statusCode: statusCode,
-      body: body,
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
-  };
-};
 
 const injectDependencies = (customCustomerDao, customAddressDao, customAddressNormalizeSao) => {
   console.log('Injecting dependencies.');
-  dynamoDocClient = new AWS.DynamoDB.DocumentClient();
-  addressSao = new AddressSao({});
-
-  if (typeof customCustomerDao !== 'undefined') {
-    customerDao = customCustomerDao
-  } else {
-    customerDao = new Dao(dynamoDocClient, CUSTOMERS_TABLE_NAME);
-  }
-
-  if (typeof customAddressDao !== 'undefined') {
-    addressDao = customAddressDao
-  } else {
-    addressDao = new Dao(dynamoDocClient, ADDRESSES_TABLE_NAME);
-  }
-
-  if( typeof customAddressNormalizeSao !== 'undefined') {
-    addressNormalizerSao = customAddressNormalizeSao;
-  }else{
-    addressNormalizerSao = new AddressNormalizerSao(ADDRESS_SAO_HOST, ADDRESS_SAO_AUTH_ID, ADDRESS_SAO_AUTH_ID_TOKEN, HTTPS);
-  }
-
-  addressSerializer = new AddressSerializer();
-  addressNormalizer = new AddressNormalizer(addressNormalizerSao);
+  customerDao = new Dao(CUSTOMERS_TABLE_NAME, DYNAMO_DOC_ClIENT);
+  addressDao = new Dao(ADDRESSES_TABLE_NAME, DYNAMO_DOC_ClIENT);
 
   addressService = new AddressService(
-    addressDao,
-    addressNormalizer,
-    addressSerializer
+    addressDao
   );
 
   addressSerializer = new AddressSerializer();
@@ -102,7 +59,7 @@ const injectDependencies = (customCustomerDao, customAddressDao, customAddressNo
   );
   customerService = new CustomerService(
     customerDao,
-    addressSao
+    addressService
   );
 
   // CustomersController receives a serializer class as a sort of interface.
@@ -111,26 +68,20 @@ const injectDependencies = (customCustomerDao, customAddressDao, customAddressNo
     customerSerializer
   );
 
+  addressSao = new AddressSao(ADDRESS_SAO_HOST, ADDRESS_SAO_AUTH_ID, ADDRESS_SAO_AUTH_ID_TOKEN, HTTPS);
+  addressNormalizer = new AddressNormalizer(addressSao);
+  addressSerializer = new AddressSerializer();
   addressesController = new AddressesController(
     addressService,
     addressSerializer,
-    customersController
+    addressNormalizer
   );
 
-  // Add real values to the SAOs at the end, to overcome circular dependencies.
-  addressSao.addressesController = addressesController;
-  addressSao.addressSerializer = addressSerializer;
-
   console.log('Dependencies injected.');
-  return {addressDao, addressesController, addressSao, addressSerializer,
-    addressSerializer, addressService, customerDao, customersController,
-    customerSerializer, customerService}
 }
-exports.injectDependencies = injectDependencies;
-
+injectDependencies();
 
 exports.customersControllerHandler = (event, context, callback) => {
-  injectDependencies();
   console.log('Received event:', JSON.stringify(event, null, 2));
 
   if (event.operation) {
@@ -147,25 +98,23 @@ exports.customersControllerHandler = (event, context, callback) => {
   switch (operation) {
     case 'fetchAll':
     case 'fetch':
-      customersController.show(params, sendHttpResponse(callback))
+      customersController.show(params, mapping.sendHttpResponse(callback))
       break;
     case 'create':
-      customersController.create(params, sendHttpResponse(callback))
+      customersController.create(params, mapping.sendHttpResponse(callback))
       break;
     case 'update':
-      customersController.update(params, sendHttpResponse(callback))
+      customersController.update(params, mapping.sendHttpResponse(callback))
       break;
     case 'delete':
-      customersController.delete(params, sendHttpResponse(callback))
+      customersController.delete(params, mapping.sendHttpResponse(callback))
       break;
     default:
       // Unsupported operation.
   }
 };
 
-
 exports.addressesControllerHandler = (event, context, callback) => {
-  injectDependencies();
   console.log('Received event:', JSON.stringify(event, null, 2));
 
   if (event.operation) {
@@ -178,16 +127,16 @@ exports.addressesControllerHandler = (event, context, callback) => {
 
   switch (operation) {
     case 'fetch':
-      addressesController.show(params, sendHttpResponse(callback))
+      addressesController.show(params, mapping.sendHttpResponse(callback))
       break;
     case 'create':
-      addressesController.create(params, sendHttpResponse(callback))
+      addressesController.create(params, mapping.sendHttpResponse(callback))
       break;
     case 'update':
-      addressesController.update(params, sendHttpResponse(callback))
+      addressesController.update(params, mapping.sendHttpResponse(callback))
       break;
     case 'delete':
-      addressesController.delete(params, sendHttpResponse(callback))
+      addressesController.delete(params, mapping.sendHttpResponse(callback))
       break;
     default:
       // Unsupported operation.
